@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LiveView Tuner prototype</title>
+    <link rel="stylesheet" href="/src/demo.css" />
+  </head>
+  <body>
+    <main class="page-shell">
+      <header class="page-header">
+        <p class="eyebrow">Prototype surface</p>
+        <h1>Tune the awkward parts in place</h1>
+        <p class="lede">
+          Open Tuner, pick an element, then adjust its spacing without leaving the page.
+        </p>
+      </header>
+
+      <section class="readiness-panel">
+        <div class="readiness-heading">
+          <span aria-hidden="true" class="status-icon">!</span>
+          <div>
+            <h2>Three things need attention</h2>
+            <p>Venue layout, showtimes, and inventory need configuration.</p>
+          </div>
+        </div>
+
+        <div class="task-list">
+          <article class="task-card">
+            <span aria-hidden="true" class="task-icon">!</span>
+            <div class="task-copy">
+              <h3>Add venue capacity</h3>
+              <p>Create sections and available seats.</p>
+              <button type="button">Configure</button>
+            </div>
+          </article>
+          <article class="task-card">
+            <span aria-hidden="true" class="task-icon">!</span>
+            <div class="task-copy">
+              <h3>Schedule a showtime</h3>
+              <p>Give buyers a date they can choose.</p>
+              <button type="button">Configure</button>
+            </div>
+          </article>
+          <article class="task-card">
+            <span aria-hidden="true" class="task-icon">!</span>
+            <div class="task-copy">
+              <h3>Create ticket inventory</h3>
+              <p>Attach something sellable to the showtime.</p>
+              <button type="button">Configure</button>
+            </div>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

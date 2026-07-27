@@ -1,0 +1,2 @@
+@import "tailwindcss";
+@source inline("pt-3 -mt-3 w-[13px] text-base font-semibold opacity-15 rounded-md border-2 backdrop-blur-md bg-[rgb(255_0_0)] text-[rgb(0_0_0)] border-[rgb(0_0_255)] shadow-[0_8px_24px_rgb(0_0_0_/_0.12)] leading-[24px] tracking-[-0.25px] flex flex-col items-center justify-between text-left");
