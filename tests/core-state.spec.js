@@ -489,3 +489,245 @@ test("preserves panel scroll and control focus across a render", async ({page}) 
   expect(after.step).toBe(before.step);
   expect(after.property).toBe(before.property);
 });
+
+test("moves the desktop panel and preserves its position across renders", async ({page}) => {
+  await page.setViewportSize({width: 1440, height: 1000});
+  const brand = page.locator("liveview-tuner .panel-brand");
+  const brandBox = await brand.boundingBox();
+  const initial = await page.locator("liveview-tuner .workspace").boundingBox();
+  const target = {left: 96, top: 72};
+  const boundedTop = Math.min(target.top, Math.max(8, 1000 - initial.height - 8));
+
+  await page.mouse.move(brandBox.x + brandBox.width / 2, brandBox.y + brandBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(
+    brandBox.x + brandBox.width / 2 + target.left - initial.x,
+    brandBox.y + brandBox.height / 2 + target.top - initial.y,
+  );
+  await page.mouse.up();
+
+  const moved = await page.locator("liveview-tuner .workspace").boundingBox();
+  expect(Math.round(moved.x)).toBe(target.left);
+  expect(Math.round(moved.y)).toBe(Math.round(boundedTop));
+  await expect(page.locator('liveview-tuner button[data-action="reset-position"]')).toBeVisible();
+
+  await page.locator('liveview-tuner button[data-tab="surface"]').click();
+  await page.evaluate(() => {
+    const tuner = document.querySelector("liveview-tuner");
+    tuner.applyStyleValue(tuner.selectedElement, "opacity", "0.9");
+  });
+  await page.locator('liveview-tuner button[data-action="close"]').click();
+  await page.locator('liveview-tuner button[data-action="open"]').click();
+
+  const preserved = await page.locator("liveview-tuner .workspace").boundingBox();
+  expect(Math.round(preserved.x)).toBe(target.left);
+  expect(Math.round(preserved.y)).toBe(Math.round(boundedTop));
+
+  await page.locator('liveview-tuner button[data-action="reset-position"]').click();
+  const reset = await page.locator("liveview-tuner .workspace").boundingBox();
+  expect(Math.round(reset.x + reset.width)).toBe(1440 - 16);
+  expect(Math.round(reset.y)).toBe(16);
+  await expect(page.locator('liveview-tuner button[data-action="reset-position"]')).toHaveCount(0);
+});
+
+test("keeps a moved panel inside the viewport and uses the mobile bottom sheet", async ({page}) => {
+  await page.setViewportSize({width: 1440, height: 1000});
+  const brand = page.locator("liveview-tuner .panel-brand");
+  const brandBox = await brand.boundingBox();
+  const initial = await page.locator("liveview-tuner .workspace").boundingBox();
+  const boundedTop = Math.min(64, Math.max(8, 1000 - initial.height - 8));
+
+  await page.mouse.move(brandBox.x + brandBox.width / 2, brandBox.y + brandBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(brandBox.x + brandBox.width / 2 + 100 - initial.x, brandBox.y + brandBox.height / 2 + 64 - initial.y);
+  await page.mouse.up();
+
+  await page.setViewportSize({width: 390, height: 844});
+  const mobile = await page.locator("liveview-tuner .workspace").boundingBox();
+  expect(Math.round(mobile.x)).toBe(8);
+  expect(Math.round(mobile.x + mobile.width)).toBe(390 - 8);
+  expect(Math.round(mobile.y + mobile.height)).toBe(844 - 8);
+  await expect(page.locator('liveview-tuner button[data-action="reset-position"]')).toBeHidden();
+
+  await page.setViewportSize({width: 1440, height: 1000});
+  const restored = await page.locator("liveview-tuner .workspace").boundingBox();
+  expect(Math.round(restored.x)).toBe(100);
+  expect(Math.round(restored.y)).toBe(Math.round(boundedTop));
+
+  await page.setViewportSize({width: 760, height: 500});
+  const clamped = await page.locator("liveview-tuner .workspace").boundingBox();
+  expect(clamped.x).toBeGreaterThanOrEqual(8);
+  expect(clamped.y).toBeGreaterThanOrEqual(8);
+  expect(clamped.x + clamped.width).toBeLessThanOrEqual(760 - 8);
+  expect(clamped.y + clamped.height).toBeLessThanOrEqual(500 - 8);
+});
+
+test("does not start panel dragging from topbar buttons or a stationary pointer", async ({page}) => {
+  await page.setViewportSize({width: 1440, height: 1000});
+  const initial = await page.locator("liveview-tuner .workspace").boundingBox();
+
+  const brand = page.locator("liveview-tuner .panel-brand");
+  const brandBox = await brand.boundingBox();
+  await page.mouse.move(brandBox.x + brandBox.width / 2, brandBox.y + brandBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.up();
+  expect(await page.evaluate(() => document.querySelector("liveview-tuner").panelPosition)).toBeNull();
+
+  await page.locator('liveview-tuner button[data-action="pick"]').click();
+  const afterButton = await page.locator("liveview-tuner .workspace").boundingBox();
+  expect(Math.round(afterButton.x)).toBe(Math.round(initial.x));
+  expect(Math.round(afterButton.y)).toBe(Math.round(initial.y));
+  expect(await page.evaluate(() => document.querySelector("liveview-tuner").panelPosition)).toBeNull();
+});
+
+test("restores the prior panel position when dragging is cancelled", async ({page}) => {
+  await page.setViewportSize({width: 1440, height: 1000});
+  const initial = await page.locator("liveview-tuner .workspace").boundingBox();
+  const brand = page.locator("liveview-tuner .panel-brand");
+  const brandBox = await brand.boundingBox();
+
+  await page.mouse.move(brandBox.x + brandBox.width / 2, brandBox.y + brandBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(brandBox.x + brandBox.width / 2 - 200, brandBox.y + brandBox.height / 2);
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await page.mouse.up();
+
+  const restored = await page.locator("liveview-tuner .workspace").boundingBox();
+  expect(Math.round(restored.x)).toBe(Math.round(initial.x));
+  expect(Math.round(restored.y)).toBe(Math.round(initial.y));
+  expect(await page.evaluate(() => document.querySelector("liveview-tuner").panelPosition)).toBeNull();
+});
+
+test("cancels an active panel drag before rendering replaces its handle", async ({page}) => {
+  await page.setViewportSize({width: 1440, height: 1000});
+  const initial = await page.locator("liveview-tuner .workspace").boundingBox();
+  const brand = page.locator("liveview-tuner .panel-brand");
+  const brandBox = await brand.boundingBox();
+
+  await page.mouse.move(brandBox.x + brandBox.width / 2, brandBox.y + brandBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(brandBox.x + brandBox.width / 2 - 200, brandBox.y + brandBox.height / 2);
+  await page.evaluate(() => document.querySelector("liveview-tuner").render());
+  await page.mouse.up();
+
+  const restored = await page.locator("liveview-tuner .workspace").boundingBox();
+  expect(Math.round(restored.x)).toBe(Math.round(initial.x));
+  expect(Math.round(restored.y)).toBe(Math.round(initial.y));
+  expect(await page.evaluate(() => {
+    const tuner = document.querySelector("liveview-tuner");
+    return {position: tuner.panelPosition, interaction: tuner.panelInteraction};
+  })).toEqual({position: null, interaction: null});
+});
+
+test("Escape cancels panel dragging without clearing the selection", async ({page}) => {
+  await page.setViewportSize({width: 1440, height: 1000});
+  const selectedId = await page.evaluate(() => document.querySelector("liveview-tuner").selectedElement.id);
+  const brand = page.locator("liveview-tuner .panel-brand");
+  const brandBox = await brand.boundingBox();
+
+  await page.mouse.move(brandBox.x + brandBox.width / 2, brandBox.y + brandBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(brandBox.x + brandBox.width / 2 - 200, brandBox.y + brandBox.height / 2);
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+
+  expect(await page.evaluate(() => {
+    const tuner = document.querySelector("liveview-tuner");
+    return {
+      selectedId: tuner.selectedElement?.id,
+      open: tuner.isOpen,
+      position: tuner.panelPosition,
+      interaction: tuner.panelInteraction,
+    };
+  })).toEqual({selectedId, open: true, position: null, interaction: null});
+});
+
+test("cancels an active drag before resize clamps the saved panel position", async ({page}) => {
+  await page.setViewportSize({width: 1440, height: 1000});
+  const brand = page.locator("liveview-tuner .panel-brand");
+  let brandBox = await brand.boundingBox();
+  let workspace = await page.locator("liveview-tuner .workspace").boundingBox();
+
+  await page.mouse.move(brandBox.x + brandBox.width / 2, brandBox.y + brandBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(brandBox.x + brandBox.width / 2 + 1000 - workspace.x, brandBox.y + brandBox.height / 2);
+  await page.mouse.up();
+
+  brandBox = await brand.boundingBox();
+  workspace = await page.locator("liveview-tuner .workspace").boundingBox();
+  await page.mouse.move(brandBox.x + brandBox.width / 2, brandBox.y + brandBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(brandBox.x + brandBox.width / 2 - 100, brandBox.y + brandBox.height / 2);
+  await page.setViewportSize({width: 760, height: 500});
+  await page.mouse.up();
+
+  const result = await page.evaluate(() => {
+    const tuner = document.querySelector("liveview-tuner");
+    const rect = tuner.shadowRoot.querySelector(".workspace").getBoundingClientRect();
+    return {
+      rect: {left: Math.round(rect.left), top: Math.round(rect.top), right: Math.round(rect.right), bottom: Math.round(rect.bottom)},
+      position: tuner.panelPosition,
+      interaction: tuner.panelInteraction,
+    };
+  });
+  expect(result.interaction).toBeNull();
+  expect(result.position).toEqual({left: result.rect.left, top: result.rect.top});
+  expect(result.rect.left).toBeGreaterThanOrEqual(8);
+  expect(result.rect.top).toBeGreaterThanOrEqual(8);
+  expect(result.rect.right).toBeLessThanOrEqual(760 - 8);
+  expect(result.rect.bottom).toBeLessThanOrEqual(500 - 8);
+});
+
+test("reveals the target end of long DOM paths and preserves manual scrolling", async ({page}) => {
+  const initial = await page.evaluate(() => {
+    const host = document.createElement("section");
+    host.innerHTML = `
+      <div class="long-ancestor-name-for-selector-testing">
+        <div class="another-long-ancestor-name-for-selector-testing">
+          <div class="third-long-ancestor-name-for-selector-testing">
+            <div id="long-selector-target"><span>Target</span></div>
+            <div id="replacement-long-selector-target"><span>Replacement</span></div>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.append(host);
+    const tuner = document.querySelector("liveview-tuner");
+    tuner.selectElement(host.querySelector("#long-selector-target"));
+    const meta = tuner.shadowRoot.querySelector(".element-meta");
+    return {
+      scrollLeft: meta.scrollLeft,
+      maxScroll: meta.scrollWidth - meta.clientWidth,
+      title: meta.title,
+      overflow: getComputedStyle(meta).overflowX,
+      textOverflow: getComputedStyle(meta).textOverflow,
+    };
+  });
+
+  expect(initial.maxScroll).toBeGreaterThan(0);
+  expect(initial.scrollLeft).toBe(initial.maxScroll);
+  expect(initial.title).toContain("div#long-selector-target");
+  expect(initial.overflow).toBe("auto");
+  expect(initial.textOverflow).not.toBe("ellipsis");
+
+  const preserved = await page.evaluate(() => {
+    const tuner = document.querySelector("liveview-tuner");
+    const meta = tuner.shadowRoot.querySelector(".element-meta");
+    meta.scrollLeft = 0;
+    meta.focus();
+    tuner.render();
+    return {
+      scrollLeft: tuner.shadowRoot.querySelector(".element-meta").scrollLeft,
+      focusKey: tuner.shadowRoot.activeElement?.dataset.focusKey,
+    };
+  });
+  expect(preserved).toEqual({scrollLeft: 0, focusKey: "selector-path"});
+
+  const replacement = await page.evaluate(() => {
+    const tuner = document.querySelector("liveview-tuner");
+    tuner.selectElement(document.querySelector("#replacement-long-selector-target"));
+    const meta = tuner.shadowRoot.querySelector(".element-meta");
+    return {scrollLeft: meta.scrollLeft, maxScroll: meta.scrollWidth - meta.clientWidth};
+  });
+  expect(replacement.scrollLeft).toBe(replacement.maxScroll);
+});

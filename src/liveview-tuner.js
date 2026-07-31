@@ -191,10 +191,11 @@ const TOOL_STYLES = `
   .element-meta {
     display: block;
     margin-top: 5px;
-    overflow: hidden;
+    overflow-x: auto;
+    overflow-y: hidden;
     color: var(--tuner-muted);
     font: 10px ui-monospace, "SFMono-Regular", Consolas, monospace;
-    text-overflow: ellipsis;
+    scrollbar-width: thin;
     white-space: nowrap;
   }
 
@@ -694,9 +695,27 @@ const TOOL_STYLES = `
 
   button:focus-visible { outline: 2px solid var(--tuner-accent); outline-offset: 2px; }
 
+  @media (min-width: 721px) {
+    .workspace[data-positioned="true"] {
+      top: var(--panel-top);
+      right: auto;
+      left: var(--panel-left);
+    }
+
+    .panel-topbar {
+      cursor: grab;
+      touch-action: none;
+      user-select: none;
+    }
+
+    .panel-topbar[data-dragging="true"] { cursor: grabbing; }
+    .panel-topbar button { cursor: pointer; }
+  }
+
   @media (max-width: 720px) {
     .workspace { top: auto; right: 8px; bottom: 8px; left: 8px; flex-direction: column-reverse; align-items: stretch; }
     .panel { width: 100%; max-height: min(68vh, 620px); }
+    .panel-topbar [data-action="reset-position"] { display: none; }
     .panel-topbar button,
     .tab,
     .link-toggle,
@@ -1129,6 +1148,10 @@ class LiveViewTunerElement extends HTMLElementBase {
     this.tailwindEnabled = false;
     this.textEdit = null;
     this.styleInteraction = null;
+    this.panelInteraction = null;
+    this.panelPosition = null;
+    this.selectorScrollLeft = null;
+    this.lastRenderedSelectedElement = null;
     this.suppressedStepClick = null;
     this.selectedElement = null;
     this.hoveredElement = null;
@@ -1191,6 +1214,7 @@ class LiveViewTunerElement extends HTMLElementBase {
     this.handleDocumentClick = this.handleDocumentClick.bind(this);
     this.handleKeydown = this.handleKeydown.bind(this);
     this.handleUiClick = this.handleUiClick.bind(this);
+    this.handleViewportResize = this.handleViewportResize.bind(this);
     this.updateOutline = this.updateOutline.bind(this);
     this.scheduleOutlineUpdate = this.scheduleOutlineUpdate.bind(this);
   }
@@ -1210,7 +1234,7 @@ class LiveViewTunerElement extends HTMLElementBase {
     document.addEventListener("click", this.handleDocumentClick, true);
     document.addEventListener("keydown", this.handleKeydown, true);
     window.addEventListener("scroll", this.scheduleOutlineUpdate, true);
-    window.addEventListener("resize", this.scheduleOutlineUpdate);
+    window.addEventListener("resize", this.handleViewportResize);
   }
 
   disconnectedCallback() {
@@ -1221,9 +1245,10 @@ class LiveViewTunerElement extends HTMLElementBase {
     document.removeEventListener("click", this.handleDocumentClick, true);
     document.removeEventListener("keydown", this.handleKeydown, true);
     window.removeEventListener("scroll", this.scheduleOutlineUpdate, true);
-    window.removeEventListener("resize", this.scheduleOutlineUpdate);
+    window.removeEventListener("resize", this.handleViewportResize);
     if (this.outlineFrame !== null) cancelAnimationFrame(this.outlineFrame);
     this.outlineFrame = null;
+    this.panelInteraction?.cancel();
     this.styleInteraction?.cancel();
     if (this.textEdit) this.finishTextEditing(false, false);
     if (!this.preserveOnDisconnect) this.revertAll(false);
@@ -1286,7 +1311,14 @@ class LiveViewTunerElement extends HTMLElementBase {
       this.recordTextChange(replacement, edit.originalText, draft, restoreText);
     }
 
-    if (this.selectedElement && replacements.has(this.selectedElement)) this.selectedElement = replacements.get(this.selectedElement);
+    if (this.selectedElement && replacements.has(this.selectedElement)) {
+      const previousSelectedElement = this.selectedElement;
+      const replacement = replacements.get(previousSelectedElement);
+      if (this.lastRenderedSelectedElement === previousSelectedElement) {
+        this.lastRenderedSelectedElement = replacement;
+      }
+      this.selectedElement = replacement;
+    }
     if (this.hoveredElement && replacements.has(this.hoveredElement)) this.hoveredElement = replacements.get(this.hoveredElement);
     if (this.similarSession) {
       this.similarSession.targets = this.similarSession.targets.map((element) => replacements.get(element) || element);
@@ -1397,7 +1429,12 @@ class LiveViewTunerElement extends HTMLElementBase {
     if (this.textEdit) return;
     if (event.key !== "Escape") return;
 
-    if (this.styleInteraction) {
+    if (this.panelInteraction) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.panelInteraction.cancel();
+      this.status = "Panel movement cancelled";
+    } else if (this.styleInteraction) {
       event.preventDefault();
       event.stopPropagation();
       this.styleInteraction.cancel();
@@ -2106,6 +2143,106 @@ class LiveViewTunerElement extends HTMLElementBase {
     if (highlight) highlight.style.display = "none";
   }
 
+  handleViewportResize() {
+    this.panelInteraction?.cancel();
+    this.scheduleOutlineUpdate();
+    this.clampPanelPosition();
+  }
+
+  boundedPanelPosition(position, workspace) {
+    const margin = 8;
+    const rect = workspace.getBoundingClientRect();
+    const maxLeft = Math.max(margin, innerWidth - rect.width - margin);
+    const maxTop = Math.max(margin, innerHeight - rect.height - margin);
+    return {
+      left: Math.round(Math.min(maxLeft, Math.max(margin, position.left))),
+      top: Math.round(Math.min(maxTop, Math.max(margin, position.top))),
+    };
+  }
+
+  applyPanelPosition(workspace, position) {
+    if (!workspace) return;
+    if (!position) {
+      delete workspace.dataset.positioned;
+      workspace.style.removeProperty("--panel-left");
+      workspace.style.removeProperty("--panel-top");
+      return;
+    }
+    workspace.dataset.positioned = "true";
+    workspace.style.setProperty("--panel-left", `${position.left}px`);
+    workspace.style.setProperty("--panel-top", `${position.top}px`);
+  }
+
+  clampPanelPosition() {
+    if (!this.panelPosition || innerWidth <= 720) return;
+    const workspace = this.shadowRoot.querySelector(".workspace");
+    if (!workspace) return;
+    this.panelPosition = this.boundedPanelPosition(this.panelPosition, workspace);
+    this.applyPanelPosition(workspace, this.panelPosition);
+  }
+
+  startPanelDrag(event, handle) {
+    if (event.button !== 0 || innerWidth <= 720 || event.target.closest("button")) return;
+    const workspace = handle.closest(".workspace");
+    if (!workspace) return;
+
+    this.panelInteraction?.cancel();
+    const pointerId = event.pointerId;
+    const rect = workspace.getBoundingClientRect();
+    const previousPosition = this.panelPosition ? {...this.panelPosition} : null;
+    const startPosition = {left: rect.left, top: rect.top};
+    let currentPosition = startPosition;
+    let moved = false;
+
+    const cleanup = () => {
+      handle.removeEventListener("pointermove", handleMove);
+      handle.removeEventListener("pointerup", handleEnd);
+      handle.removeEventListener("pointercancel", handleCancel);
+      window.removeEventListener("blur", handleCancel);
+      delete handle.dataset.dragging;
+      if (handle.hasPointerCapture?.(pointerId)) handle.releasePointerCapture(pointerId);
+      if (this.panelInteraction === interaction) this.panelInteraction = null;
+    };
+
+    const handleMove = (moveEvent) => {
+      if (moveEvent.pointerId !== pointerId) return;
+      const deltaX = moveEvent.clientX - event.clientX;
+      const deltaY = moveEvent.clientY - event.clientY;
+      if (!moved && Math.max(Math.abs(deltaX), Math.abs(deltaY)) < 3) return;
+      moved = true;
+      moveEvent.preventDefault();
+      handle.dataset.dragging = "true";
+      currentPosition = this.boundedPanelPosition({
+        left: startPosition.left + deltaX,
+        top: startPosition.top + deltaY,
+      }, workspace);
+      this.applyPanelPosition(workspace, currentPosition);
+    };
+
+    const handleEnd = (endEvent) => {
+      if (endEvent.pointerId !== pointerId) return;
+      cleanup();
+      if (!moved) return;
+      this.panelPosition = currentPosition;
+      this.status = "Panel moved";
+      this.render();
+    };
+
+    const handleCancel = (cancelEvent) => {
+      if (cancelEvent?.pointerId !== undefined && cancelEvent.pointerId !== pointerId) return;
+      cleanup();
+      this.applyPanelPosition(workspace, previousPosition);
+    };
+
+    const interaction = {cancel: handleCancel};
+    this.panelInteraction = interaction;
+    handle.setPointerCapture(pointerId);
+    handle.addEventListener("pointermove", handleMove);
+    handle.addEventListener("pointerup", handleEnd);
+    handle.addEventListener("pointercancel", handleCancel);
+    window.addEventListener("blur", handleCancel, {once: true});
+  }
+
   handleUiClick(event) {
     const button = event.target.closest("button");
     if (!button) return;
@@ -2124,6 +2261,10 @@ class LiveViewTunerElement extends HTMLElementBase {
       this.isPicking = !this.isPicking;
       this.hoveredElement = null;
       this.status = this.isPicking ? "Picker active" : "Picker paused";
+      this.render();
+    } else if (action === "reset-position") {
+      this.panelPosition = null;
+      this.status = "Panel position reset";
       this.render();
     } else if (action === "revert-all") {
       this.revertAll();
@@ -2293,6 +2434,7 @@ class LiveViewTunerElement extends HTMLElementBase {
         <span class="panel-brand">LiveView Tuner</span>
         <span class="panel-topbar-actions" aria-label="Tuner controls">
           <button type="button" class="${this.isPicking ? "picker-active" : ""}" data-action="pick" aria-pressed="${this.isPicking}" aria-label="Pick an element">Pick</button>
+          ${this.panelPosition ? `<button type="button" data-action="reset-position" aria-label="Reset panel position">Reset</button>` : ""}
           <button type="button" data-action="close" aria-label="Close tuner">Close</button>
         </span>
       </div>
@@ -2372,7 +2514,7 @@ class LiveViewTunerElement extends HTMLElementBase {
         <header class="panel-header">
           <span class="target-overline">Selected element</span>
           <span class="element-name" title="${escapeHtml(targetLabel)}">${escapeHtml(targetLabel)}</span>
-          <span class="element-meta" title="${escapeHtml(this.selectorFor(element))}">${escapeHtml(targetMeta)}</span>
+          <span class="element-meta" title="${escapeHtml(this.selectorFor(element))}" tabindex="0" data-focus-key="selector-path">${escapeHtml(targetMeta)}</span>
           <div class="inspector-tools" aria-label="Inspector options">
             ${this.isTextLeaf(element) ? `<button type="button" class="link-toggle" data-action="edit-text">Edit text</button>` : ""}
             ${similarCount > 1 ? `<button type="button" class="link-toggle" data-action="similar" aria-pressed="${this.similarEnabled}">Similar ${similarCount}${similarCapped ? "+" : ""}</button>` : ""}
@@ -2393,14 +2535,23 @@ class LiveViewTunerElement extends HTMLElementBase {
   }
 
   render() {
+    this.panelInteraction?.cancel();
     const previousScrollTop = this.shadowRoot.querySelector(".panel-scroll")?.scrollTop || 0;
+    const currentElementMeta = this.shadowRoot.querySelector(".element-meta");
+    if (currentElementMeta && this.lastRenderedSelectedElement === this.selectedElement) {
+      this.selectorScrollLeft = currentElementMeta.scrollLeft;
+    }
+    const selectedElementChanged = this.lastRenderedSelectedElement !== this.selectedElement;
     const previousFocus = this.focusSnapshot();
+    const workspacePosition = this.panelPosition
+      ? ` data-positioned="true" style="--panel-left: ${this.panelPosition.left}px; --panel-top: ${this.panelPosition.top}px"`
+      : "";
     this.shadowRoot.innerHTML = `
       <style>${TOOL_STYLES}</style>
       <div class="outline main-outline" aria-hidden="true"><span class="outline-label"></span></div>
       <div class="spacing-edge-highlight" aria-hidden="true"></div>
       ${this.isOpen ? `
-        <div class="workspace">
+        <div class="workspace"${workspacePosition}>
           ${this.inspectorMarkup()}
         </div>
       ` : `
@@ -2414,18 +2565,26 @@ class LiveViewTunerElement extends HTMLElementBase {
 
     this.bindUiEvents();
     this.restoreFocus(previousFocus);
+    this.lastRenderedSelectedElement = this.selectedElement;
     const panelScroll = this.shadowRoot.querySelector(".panel-scroll");
     if (panelScroll) {
       panelScroll.scrollTop = previousScrollTop;
       panelScroll.dispatchEvent(new Event("scroll"));
     }
+    const elementMeta = this.shadowRoot.querySelector(".element-meta");
+    if (elementMeta) {
+      elementMeta.scrollLeft = selectedElementChanged || this.selectorScrollLeft === null
+        ? elementMeta.scrollWidth
+        : this.selectorScrollLeft;
+    }
+    this.clampPanelPosition();
     this.updateOutline();
   }
 
   focusSnapshot() {
     const element = this.shadowRoot.activeElement;
     if (!(element instanceof HTMLElement)) return null;
-    const attributes = ["id", "data-property", "data-style-property", "data-tab", "data-action", "data-step", "data-revert", "data-ancestor"];
+    const attributes = ["id", "data-property", "data-style-property", "data-tab", "data-action", "data-step", "data-revert", "data-ancestor", "data-focus-key"];
     const attribute = attributes.find((name) => element.hasAttribute(name));
     if (!attribute) return null;
     return {
@@ -2453,6 +2612,9 @@ class LiveViewTunerElement extends HTMLElementBase {
   bindUiEvents() {
     this.shadowRoot.removeEventListener("click", this.handleUiClick);
     this.shadowRoot.addEventListener("click", this.handleUiClick);
+
+    const panelTopbar = this.shadowRoot.querySelector(".panel-topbar");
+    panelTopbar?.addEventListener("pointerdown", (event) => this.startPanelDrag(event, panelTopbar));
 
     for (const input of this.shadowRoot.querySelectorAll("input[data-property]")) {
       input.addEventListener("pointerdown", (event) => this.startScrub(event, input));

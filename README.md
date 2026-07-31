@@ -40,6 +40,12 @@ If you use another bundler, apply its compile-time development guard around the 
 
 The available controls cover display, dimensions, flex layout, spacing, typography, colors, borders, shadows, backdrop blur, and opacity. Numeric controls support buttons, press-and-hold stepping, and drag scrubbing.
 
+### Move the inspector
+
+On desktop, drag an empty area of the inspector's top bar to move it out of the way. Its position remains stable while you select elements, switch tabs, and receive LiveView patches. **Reset** returns a moved inspector to the top-right corner.
+
+The inspector stays within the viewport and returns to its mobile bottom-sheet layout at narrow widths. Its desktop position is kept only for the current tuner instance and is cleared by a page reload or `destroy()`.
+
 ### Similar elements
 
 When the selected element has matching siblings, **Similar** applies an edit to a frozen group of matches. The group does not change until Similar mode is restarted. A session includes at most 25 elements; the panel and copied prompt disclose when more matches exist.

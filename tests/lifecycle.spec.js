@@ -31,6 +31,43 @@ test("reconnects a selected stable-ID element before it has changes", async ({pa
   expect(result).toEqual({connected: true, replacement: true, text: "Server replacement"});
 });
 
+test("preserves selector path scrolling across a stable-ID replacement", async ({page}) => {
+  await page.goto("/");
+  await page.waitForSelector("liveview-tuner");
+  const result = await page.evaluate(async () => {
+    const host = document.createElement("section");
+    host.innerHTML = `
+      <div class="long-ancestor-name-for-lifecycle-testing">
+        <div class="another-long-ancestor-name-for-lifecycle-testing">
+          <div class="third-long-ancestor-name-for-lifecycle-testing">
+            <div id="selector-replacement-target"><span>Target</span></div>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.append(host);
+    const tuner = document.querySelector("liveview-tuner");
+    const oldElement = host.querySelector("#selector-replacement-target");
+    tuner.selectElement(oldElement);
+    const oldMeta = tuner.shadowRoot.querySelector(".element-meta");
+    oldMeta.scrollLeft = 0;
+
+    const replacement = oldElement.cloneNode(true);
+    oldElement.replaceWith(replacement);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const newMeta = tuner.shadowRoot.querySelector(".element-meta");
+    return {
+      replacement: tuner.selectedElement === replacement,
+      scrollLeft: newMeta.scrollLeft,
+      maxScroll: newMeta.scrollWidth - newMeta.clientWidth,
+    };
+  });
+
+  expect(result.replacement).toBe(true);
+  expect(result.maxScroll).toBeGreaterThan(0);
+  expect(result.scrollLeft).toBe(0);
+});
+
 test("Undo restores the replacement server inline baseline", async ({page}) => {
   await fixture(page);
   const result = await page.evaluate(async () => {
