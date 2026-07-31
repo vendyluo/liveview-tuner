@@ -1,7 +1,21 @@
 {
   "name": "liveview-tuner",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.1.0",
+  "description": "A development overlay for tuning Phoenix LiveView interfaces in the browser.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vendyluo/liveview-tuner.git"
+  },
+  "homepage": "https://github.com/vendyluo/liveview-tuner#readme",
+  "bugs": "https://github.com/vendyluo/liveview-tuner/issues",
+  "keywords": [
+    "phoenix",
+    "liveview",
+    "developer-tools",
+    "css",
+    "tailwindcss"
+  ],
   "type": "module",
   "exports": {
     ".": "./src/liveview-tuner.js"
