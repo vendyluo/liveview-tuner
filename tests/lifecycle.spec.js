@@ -101,6 +101,110 @@ test("commits a text draft onto a replacement and Undo reveals server text", asy
   });
 });
 
+test("copies current Phoenix source after a stable-ID replacement", async ({page}) => {
+  await page.goto("/");
+  await page.waitForSelector("liveview-tuner");
+  const prompt = await page.evaluate(async () => {
+    const host = document.createElement("section");
+    host.id = "source-replacement-fixture";
+    host.innerHTML = `
+      <!-- <AppWeb.Components.old> lib/old.ex:10 (app) -->
+      <div id="target" data-phx-loc="11">Old</div>
+      <!-- </AppWeb.Components.old> -->
+    `;
+    document.body.append(host);
+    const tuner = document.querySelector("liveview-tuner");
+    tuner.selectElement(host.querySelector("#target"));
+    tuner.applyStyleValue(host.querySelector("#target"), "width", "120px");
+
+    host.innerHTML = `
+      <!-- <AppWeb.Components.current> lib/current.ex:30 (app) -->
+      <div id="target" data-phx-loc="31">Current</div>
+      <!-- </AppWeb.Components.current> -->
+    `;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    let copied = "";
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {writeText: async (value) => { copied = value; }},
+    });
+    await tuner.copyChanges();
+    return copied;
+  });
+
+  expect(prompt).toContain('data-phx-loc: "31"');
+  expect(prompt).toContain('"name":"AppWeb.Components.current"');
+  expect(prompt).toContain('"heex":"lib/current.ex:31"');
+  expect(prompt).not.toContain("lib/old.ex");
+});
+
+test("omits stale Phoenix source when a connected element loses its annotations", async ({page}) => {
+  await page.goto("/");
+  await page.waitForSelector("liveview-tuner");
+  const prompt = await page.evaluate(async () => {
+    const host = document.createElement("section");
+    const open = document.createComment(" <AppWeb.Components.card> lib/card.ex:10 (app) ");
+    const target = document.createElement("div");
+    target.id = "target";
+    target.dataset.phxLoc = "11";
+    const close = document.createComment(" </AppWeb.Components.card> ");
+    host.append(open, target, close);
+    document.body.append(host);
+    const tuner = document.querySelector("liveview-tuner");
+    tuner.selectElement(target);
+    tuner.applyStyleValue(target, "width", "120px");
+
+    open.remove();
+    close.remove();
+    target.dataset.phxLoc = "12";
+
+    let copied = "";
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {writeText: async (value) => { copied = value; }},
+    });
+    await tuner.copyChanges();
+    return copied;
+  });
+
+  expect(prompt).toContain('data-phx-loc: "12"');
+  expect(prompt).not.toContain("Phoenix source:");
+  expect(prompt).not.toContain("lib/card.ex");
+});
+
+test("uses captured Phoenix source only after the changed element is removed", async ({page}) => {
+  await page.goto("/");
+  await page.waitForSelector("liveview-tuner");
+  const prompt = await page.evaluate(async () => {
+    const host = document.createElement("section");
+    host.innerHTML = `
+      <!-- <AppWeb.Components.card> lib/card.ex:10 (app) -->
+      <div id="target" data-phx-loc="11">Original</div>
+      <!-- </AppWeb.Components.card> -->
+    `;
+    document.body.append(host);
+    const tuner = document.querySelector("liveview-tuner");
+    const target = host.querySelector("#target");
+    tuner.selectElement(target);
+    tuner.applyStyleValue(target, "width", "120px");
+    host.replaceChildren();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    let copied = "";
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {writeText: async (value) => { copied = value; }},
+    });
+    await tuner.copyChanges();
+    return copied;
+  });
+
+  expect(prompt).toContain('data-phx-loc: "11"');
+  expect(prompt).toContain('"name":"AppWeb.Components.card"');
+  expect(prompt).toContain('"heex":"lib/card.ex:11"');
+});
+
 test("uses a supported plain-text editing mode and restores the prior attribute", async ({page}) => {
   await fixture(page, '<button id="target" contenteditable="false">Original</button>');
   const result = await page.evaluate(() => {

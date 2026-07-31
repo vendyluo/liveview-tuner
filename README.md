@@ -58,6 +58,21 @@ LiveView may update or replace an element while it is being tuned. The tuner wat
 
 Reconnection requires a replacement with the same stable DOM `id` and tag name. Elements without stable IDs become stale when replaced; discard their recorded changes or pick the replacement.
 
+### Optional Phoenix source context
+
+Copy edits can include the HEEx caller, component, slot, and line context emitted by Phoenix LiveView's development annotations. Enable both annotation options in development:
+
+```elixir
+# config/dev.exs
+config :phoenix_live_view,
+  debug_heex_annotations: true,
+  debug_attributes: true
+```
+
+`debug_heex_annotations` adds caller, component, and slot comments; `debug_attributes` adds `data-phx-loc` line metadata. You may need to run `mix clean` and fully recompile after changing these options.
+
+Source attribution is best-effort and has been tested against LiveView 1.1 and 1.2 debug output, which is not a stable browser-tool protocol. LiveView Tuner still works without either option and simply omits source context when it cannot resolve it safely. Source paths and OTP app names can be copied to the clipboard, so review prompts before sharing them.
+
 ## API
 
 ```js

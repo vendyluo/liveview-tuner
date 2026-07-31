@@ -920,6 +920,199 @@ function colorInputValue(value) {
   ).join("")}`;
 }
 
+const PHOENIX_ANNOTATION_LIMITS = {
+  comment: 1024,
+  name: 256,
+  path: 512,
+  app: 128,
+};
+
+function hasUnsafeAnnotationText(value, limit) {
+  return value.length > limit || /[\u0000-\u001f\u007f]/.test(value);
+}
+
+function parsePhoenixSource(value) {
+  const match = value.match(/^(.*):([1-9]\d*) \(([^()]*)\)$/);
+  if (!match) return null;
+  const [, path, lineText, otpApp] = match;
+  const line = Number(lineText);
+  if (!path || !Number.isSafeInteger(line) ||
+      hasUnsafeAnnotationText(path, PHOENIX_ANNOTATION_LIMITS.path) ||
+      hasUnsafeAnnotationText(otpApp, PHOENIX_ANNOTATION_LIMITS.app)) {
+    return null;
+  }
+  return {path, line, otpApp};
+}
+
+function validPhoenixScopeName(name) {
+  if (hasUnsafeAnnotationText(name, PHOENIX_ANNOTATION_LIMITS.name)) return false;
+  if (/^:[A-Za-z_][A-Za-z0-9_!?-]*$/.test(name)) return true;
+  return /^[A-Z][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_!?]*)+$/.test(name);
+}
+
+function looksLikePhoenixAnnotation(value) {
+  return /^@caller(?:\s|$)/.test(value) ||
+    /^<\/?:(?:[A-Za-z_]|$)/.test(value) ||
+    /^<\/?[A-Z][A-Za-z0-9_.!?]*(?:\s|>)/.test(value);
+}
+
+function parsePhoenixAnnotation(value) {
+  const text = value.trim();
+  if (!text || hasUnsafeAnnotationText(text, PHOENIX_ANNOTATION_LIMITS.comment)) {
+    return looksLikePhoenixAnnotation(text) ? {type: "invalid"} : null;
+  }
+
+  if (text.startsWith("@caller ")) {
+    const source = parsePhoenixSource(text.slice(8));
+    return source ? {type: "caller", source} : {type: "invalid"};
+  }
+
+  const close = text.match(/^<\/([^<>]+)>$/);
+  if (close) {
+    return validPhoenixScopeName(close[1])
+      ? {type: "close", name: close[1]}
+      : {type: "invalid"};
+  }
+
+  const open = text.match(/^<([^<>]+)> (.+)$/);
+  if (open) {
+    const [, name, sourceText] = open;
+    const source = parsePhoenixSource(sourceText);
+    if (!validPhoenixScopeName(name) || !source) return {type: "invalid"};
+    return {type: "open", kind: name.startsWith(":") ? "slot" : "component", name, source};
+  }
+
+  return looksLikePhoenixAnnotation(text) ? {type: "invalid"} : null;
+}
+
+function phoenixFramesAtBranch(parent, branch) {
+  const stack = [];
+  let pendingCaller = null;
+  let frames = null;
+  let invalid = false;
+
+  for (const node of parent.childNodes) {
+    if (node === branch) frames = stack.map((frame) => ({...frame}));
+
+    if (node.nodeType === 3 && node.data.trim() === "") continue;
+    if (node.nodeType !== 8) {
+      pendingCaller = null;
+      continue;
+    }
+
+    const annotation = parsePhoenixAnnotation(node.data);
+    if (!annotation) {
+      pendingCaller = null;
+      continue;
+    }
+    if (annotation.type === "invalid") {
+      invalid = true;
+      pendingCaller = null;
+      continue;
+    }
+    if (annotation.type === "caller") {
+      if (pendingCaller !== null) invalid = true;
+      pendingCaller = annotation.source;
+      continue;
+    }
+    if (annotation.type === "open") {
+      stack.push({
+        kind: annotation.kind,
+        name: annotation.name,
+        source: annotation.source,
+        caller: annotation.kind === "component" ? pendingCaller : null,
+      });
+      pendingCaller = null;
+      continue;
+    }
+
+    pendingCaller = null;
+    if (stack.at(-1)?.name === annotation.name) stack.pop();
+    else invalid = true;
+  }
+
+  if (frames === null || stack.length > 0) invalid = true;
+  return {frames: frames || [], invalid};
+}
+
+function phoenixSourceContext(element) {
+  if (!element?.isConnected) return null;
+  const frameLayers = [];
+  let branch = element;
+
+  while (branch?.parentNode) {
+    const parent = branch.parentNode;
+    if (typeof ShadowRoot !== "undefined" && parent instanceof ShadowRoot) break;
+    const result = phoenixFramesAtBranch(parent, branch);
+    if (result.invalid) return null;
+    if (result.frames.length > 0) frameLayers.push(result.frames);
+    if (parent.nodeType !== 1) break;
+    branch = parent;
+  }
+
+  let direct = null;
+  let component = null;
+  for (const frames of frameLayers) {
+    for (let index = frames.length - 1; index >= 0; index -= 1) {
+      const frame = frames[index];
+      if (!direct) direct = frame;
+      if (!component && frame.kind === "component") component = frame;
+    }
+  }
+  if (!direct) return null;
+
+  const phxLoc = element.getAttribute("data-phx-loc");
+  const elementLine = /^[1-9]\d*$/.test(phxLoc || "") ? Number(phxLoc) : null;
+  const elementSource = Number.isSafeInteger(elementLine)
+    ? {path: direct.source.path, line: elementLine}
+    : null;
+
+  return {
+    direct: {
+      kind: direct.kind,
+      name: direct.name,
+      source: {...direct.source},
+    },
+    elementSource,
+    component: component ? {
+      name: component.name,
+      definition: {...component.source},
+      caller: component.caller ? {...component.caller} : null,
+    } : null,
+  };
+}
+
+function sourceLocation(source) {
+  return `${source.path}:${source.line}`;
+}
+
+function phoenixPromptRecord(context) {
+  if (!context) return null;
+  const record = {
+    scope: {
+      kind: context.direct.kind,
+      name: context.direct.name,
+      location: sourceLocation(context.direct.source),
+    },
+  };
+  if (context.direct.source.otpApp) record.scope.otpApp = context.direct.source.otpApp;
+  if (context.elementSource) record.heex = sourceLocation(context.elementSource);
+  if (context.component) {
+    record.component = {
+      name: context.component.name,
+      definition: sourceLocation(context.component.definition),
+    };
+    if (context.component.definition.otpApp) {
+      record.component.definitionOtpApp = context.component.definition.otpApp;
+    }
+    if (context.component.caller) {
+      record.component.caller = sourceLocation(context.component.caller);
+      if (context.component.caller.otpApp) record.component.callerOtpApp = context.component.caller.otpApp;
+    }
+  }
+  return record;
+}
+
 const HTMLElementBase = globalThis.HTMLElement || class {};
 
 class LiveViewTunerElement extends HTMLElementBase {
@@ -1541,6 +1734,7 @@ class LiveViewTunerElement extends HTMLElementBase {
       id: element.id || "",
       classes: [...element.classList],
       phxLoc: element.getAttribute("data-phx-loc") || "",
+      phoenixSource: phoenixSourceContext(element),
       property,
       originalComputed,
       originalInline,
@@ -1727,6 +1921,20 @@ class LiveViewTunerElement extends HTMLElementBase {
 
     let targetIndex = 0;
     for (const {change, memberCount, entries} of promptGroups.values()) {
+      const targetMembers = [...new Map(entries.flatMap(({members}) =>
+        members.map((member) => [member.element, member])
+      )).values()];
+      const resolvedSources = targetMembers.flatMap((member) => {
+        const context = member.element.isConnected
+          ? phoenixSourceContext(member.element)
+          : member.phoenixSource;
+        const record = phoenixPromptRecord(context);
+        return record ? [record] : [];
+      });
+      const uniqueSources = [...new Map(resolvedSources.map((record) => [JSON.stringify(record), record])).values()];
+      const livePhxLoc = change.element.isConnected
+        ? change.element.getAttribute("data-phx-loc") || ""
+        : change.phxLoc;
       targetIndex += 1;
       lines.push(`### Target ${targetIndex}`);
       lines.push(`Semantic description: ${JSON.stringify(change.semanticTarget)}`);
@@ -1734,7 +1942,12 @@ class LiveViewTunerElement extends HTMLElementBase {
       lines.push(`Element: ${JSON.stringify(change.elementName)}`);
       if (change.id) lines.push(`ID: ${JSON.stringify(change.id)}`);
       if (change.classes.length) lines.push(`Classes: ${JSON.stringify(change.classes)}`);
-      if (change.phxLoc) lines.push(`data-phx-loc: ${JSON.stringify(change.phxLoc)}`);
+      if (livePhxLoc) lines.push(`data-phx-loc: ${JSON.stringify(livePhxLoc)}`);
+      if (uniqueSources.length === 1 && targetMembers.length === 1) {
+        lines.push(`Phoenix source: ${JSON.stringify(uniqueSources[0])}`);
+      } else if (uniqueSources.length > 0) {
+        lines.push(`Phoenix sources (${resolvedSources.length} of ${targetMembers.length} elements resolved): ${JSON.stringify(uniqueSources)}`);
+      }
       if (memberCount > 1 && change.similarCapped) {
         lines.push(`Scope: first ${memberCount} matching elements; additional matches were not included`);
       } else if (memberCount > 1) {
