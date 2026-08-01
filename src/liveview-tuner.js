@@ -286,6 +286,49 @@ const TOOL_STYLES = `
 
   .section-meta { display: flex; align-items: center; gap: 7px; }
 
+  .section-toggle {
+    display: inline-flex;
+    min-width: 0;
+    min-height: 28px;
+    align-items: center;
+    gap: 6px;
+    padding: 0;
+    border: 0;
+    color: inherit;
+    background: transparent;
+    cursor: pointer;
+    font: inherit;
+    font-weight: inherit;
+    text-align: left;
+  }
+
+  .section-toggle:hover,
+  .section-toggle:focus-visible { color: var(--tuner-accent); }
+
+  .section-chevron {
+    width: 8px;
+    color: var(--tuner-muted);
+    font-size: 13px;
+    line-height: 1;
+    transform: rotate(90deg);
+  }
+
+  .section-toggle[aria-expanded="false"] .section-chevron { transform: rotate(0); }
+  .section-content[hidden] { display: none; }
+
+  .section-suggestion {
+    padding: 2px 5px;
+    border-radius: 999px;
+    color: var(--tuner-accent);
+    background: var(--tuner-accent-soft);
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .section[data-collapsed="true"] .section-title { margin-bottom: 0; }
+
   .section-unit {
     color: var(--tuner-muted);
     font: 9px ui-monospace, "SFMono-Regular", Consolas, monospace;
@@ -718,6 +761,7 @@ const TOOL_STYLES = `
     .panel-topbar [data-action="reset-position"] { display: none; }
     .panel-topbar button,
     .tab,
+    .section-toggle,
     .link-toggle,
     .spacing-mode button,
     .change-revert,
@@ -1141,6 +1185,7 @@ class LiveViewTunerElement extends HTMLElementBase {
     this.isOpen = false;
     this.isPicking = false;
     this.activeTab = "layout";
+    this.collapsedSections = new Set();
     this.linkedGroups = {padding: false, margin: false};
     this.similarEnabled = false;
     this.similarSession = null;
@@ -1454,14 +1499,47 @@ class LiveViewTunerElement extends HTMLElementBase {
   }
 
   selectElement(element) {
+    const isNewSelection = this.selectedElement !== element;
+    const context = isNewSelection ? this.controlContextFor(element) : null;
     this.selectedElement = element;
     this.hoveredElement = null;
     this.isPicking = false;
     this.isOpen = true;
+    if (context) {
+      this.activeTab = context.tab;
+      this.collapsedSections.delete(this.sectionKey(context.tab, context.section));
+    }
     this.similarEnabled = false;
     this.similarSession = null;
     this.status = `Selected ${this.describeElement(element)}`;
     this.render();
+  }
+
+  sectionKey(tab, title) {
+    return `${tab}:${title}`;
+  }
+
+  controlContextFor(element) {
+    const display = getComputedStyle(element).display;
+    if (element.matches("img, picture, video, canvas, svg, input, textarea, select")) {
+      return {tab: "layout", section: "Dimensions"};
+    }
+    if (display === "flex" || display === "inline-flex") {
+      return {tab: "layout", section: "Flex"};
+    }
+    if (display === "grid" || display === "inline-grid") {
+      return {tab: "layout", section: "Padding"};
+    }
+    if (this.isTextLeaf(element)) {
+      return {tab: "type", section: "Metrics"};
+    }
+
+    const computed = getComputedStyle(element);
+    const hasSurface = computed.backgroundColor !== "rgba(0, 0, 0, 0)" && computed.backgroundColor !== "transparent" ||
+      computed.borderStyle !== "none" && Number.parseFloat(computed.borderWidth) > 0;
+    return hasSurface
+      ? {tab: "surface", section: "Colors"}
+      : {tab: "layout", section: "Padding"};
   }
 
   describeElement(element) {
@@ -2281,6 +2359,11 @@ class LiveViewTunerElement extends HTMLElementBase {
       this.tailwindEnabled = !this.tailwindEnabled;
       this.status = `Tailwind snapping ${this.tailwindEnabled ? "enabled" : "disabled"}`;
       this.render();
+    } else if (button.dataset.sectionToggle) {
+      const key = button.dataset.sectionToggle;
+      if (this.collapsedSections.has(key)) this.collapsedSections.delete(key);
+      else this.collapsedSections.add(key);
+      this.render();
     } else if (button.dataset.tab) {
       this.activeTab = button.dataset.tab;
       this.render();
@@ -2372,15 +2455,23 @@ class LiveViewTunerElement extends HTMLElementBase {
     `;
   }
 
-  spacingSectionMarkup(section, element, linked, unit) {
+  spacingSectionMarkup(section, element, linked, unit, context) {
+    const key = this.sectionKey(this.activeTab, section.title);
+    const collapsed = this.collapsedSections.has(key);
+    const suggested = context.tab === this.activeTab && context.section === section.title;
     const controls = linked
       ? this.controlMarkup({...section.controls[0], label: "All sides"}, element)
       : section.controls.map((control) => this.controlMarkup(control, element)).join("");
+    const contentId = `section-${this.activeTab}-${section.title.toLowerCase()}`;
 
     return `
-      <section class="section spacing-section" data-spacing-section="${section.linkGroup}">
+      <section class="section spacing-section" data-spacing-section="${section.linkGroup}" data-section-title="${section.title}" data-collapsed="${collapsed}">
         <h2 class="section-title">
-          ${section.title}
+          <button type="button" class="section-toggle" data-section-toggle="${key}" aria-expanded="${!collapsed}" aria-controls="${contentId}">
+            <span class="section-chevron" aria-hidden="true">›</span>
+            <span>${section.title}</span>
+            ${suggested ? `<span class="section-suggestion">Suggested</span>` : ""}
+          </button>
           <span class="section-meta">
             <span class="spacing-mode" role="group" aria-label="${section.title} editing mode">
               <button type="button" data-link-group="${section.linkGroup}" data-link-mode="true" aria-pressed="${linked}">Linked</button>
@@ -2389,39 +2480,49 @@ class LiveViewTunerElement extends HTMLElementBase {
             <span class="section-unit">${unit}</span>
           </span>
         </h2>
-        ${linked ? `
-          <div class="spacing-linked">
-            <div class="spacing-linked-preview" aria-hidden="true"><span>Content</span></div>
-            ${controls}
-          </div>
-        ` : `
-          <div class="spacing-map">
-            ${controls}
-            <div class="spacing-center" aria-hidden="true">Content</div>
-          </div>
-        `}
+        <div id="${contentId}" class="section-content" ${collapsed ? "hidden" : ""}>
+          ${linked ? `
+            <div class="spacing-linked">
+              <div class="spacing-linked-preview" aria-hidden="true"><span>Content</span></div>
+              ${controls}
+            </div>
+          ` : `
+            <div class="spacing-map">
+              ${controls}
+              <div class="spacing-center" aria-hidden="true">Content</div>
+            </div>
+          `}
+        </div>
       </section>
     `;
   }
 
-  sectionMarkup(section, element) {
+  sectionMarkup(section, element, context) {
+    const key = this.sectionKey(this.activeTab, section.title);
+    const collapsed = this.collapsedSections.has(key);
+    const suggested = context.tab === this.activeTab && context.section === section.title;
     const linked = section.linkGroup ? this.linkedGroups[section.linkGroup] : false;
     const allNumeric = section.controls.every((control) => !control.kind || control.kind === "number");
     const unit = allNumeric && section.controls.every((control) => control.unit === section.controls[0].unit)
       ? section.controls[0].unit
       : "";
 
-    if (section.linkGroup) return this.spacingSectionMarkup(section, element, linked, unit);
+    if (section.linkGroup) return this.spacingSectionMarkup(section, element, linked, unit, context);
 
+    const contentId = `section-${this.activeTab}-${section.title.toLowerCase().replaceAll(" ", "-")}`;
     return `
-      <section class="section">
+      <section class="section" data-section-title="${section.title}" data-collapsed="${collapsed}">
         <h2 class="section-title">
-          ${section.title}
+          <button type="button" class="section-toggle" data-section-toggle="${key}" aria-expanded="${!collapsed}" aria-controls="${contentId}">
+            <span class="section-chevron" aria-hidden="true">›</span>
+            <span>${section.title}</span>
+            ${suggested ? `<span class="section-suggestion">Suggested</span>` : ""}
+          </button>
           <span class="section-meta">
             <span class="section-unit">${unit}</span>
           </span>
         </h2>
-        <div class="control-grid ${section.single ? "single" : ""}">
+        <div id="${contentId}" class="section-content control-grid ${section.single ? "single" : ""}" ${collapsed ? "hidden" : ""}>
           ${section.controls.map((control) => this.controlMarkup(control, element)).join("")}
         </div>
       </section>
@@ -2466,9 +2567,14 @@ class LiveViewTunerElement extends HTMLElementBase {
     const targetMeta = this.isTextLeaf(element)
       ? this.describeElement(element)
       : this.selectorFor(element);
+    const controlContext = element.isConnected ? this.controlContextFor(element) : null;
     const controlsMarkup = element.isConnected
-      ? TAB_CONTROLS[this.activeTab]
-        .map((section) => this.sectionMarkup(section, element))
+      ? [...TAB_CONTROLS[this.activeTab]]
+        .sort((left, right) => {
+          if (controlContext.tab !== this.activeTab) return 0;
+          return Number(right.title === controlContext.section) - Number(left.title === controlContext.section);
+        })
+        .map((section) => this.sectionMarkup(section, element, controlContext))
         .join("")
       : `
         <p class="stale-selection">
@@ -2568,7 +2674,7 @@ class LiveViewTunerElement extends HTMLElementBase {
     this.lastRenderedSelectedElement = this.selectedElement;
     const panelScroll = this.shadowRoot.querySelector(".panel-scroll");
     if (panelScroll) {
-      panelScroll.scrollTop = previousScrollTop;
+      panelScroll.scrollTop = selectedElementChanged ? 0 : previousScrollTop;
       panelScroll.dispatchEvent(new Event("scroll"));
     }
     const elementMeta = this.shadowRoot.querySelector(".element-meta");
@@ -2584,7 +2690,7 @@ class LiveViewTunerElement extends HTMLElementBase {
   focusSnapshot() {
     const element = this.shadowRoot.activeElement;
     if (!(element instanceof HTMLElement)) return null;
-    const attributes = ["id", "data-property", "data-style-property", "data-tab", "data-action", "data-step", "data-revert", "data-ancestor", "data-focus-key"];
+    const attributes = ["id", "data-property", "data-style-property", "data-tab", "data-action", "data-step", "data-revert", "data-ancestor", "data-focus-key", "data-section-toggle"];
     const attribute = attributes.find((name) => element.hasAttribute(name));
     if (!attribute) return null;
     return {

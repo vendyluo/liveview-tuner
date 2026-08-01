@@ -1,6 +1,6 @@
 {
   "name": "liveview-tuner",
-  "version": "0.3.0",
+  "version": "0.2.0",
   "description": "A development overlay for tuning Phoenix LiveView interfaces in the browser.",
   "license": "MIT",
   "repository": {

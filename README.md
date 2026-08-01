@@ -46,6 +46,12 @@ On desktop, drag an empty area of the inspector's top bar to move it out of the 
 
 The inspector stays within the viewport and returns to its mobile bottom-sheet layout at narrow widths. Its desktop position is kept only for the current tuner instance and is cleared by a page reload or `destroy()`.
 
+### Context-aware controls
+
+Picking a new element opens the most relevant property tab and places one suggested section first. Text prioritizes type metrics, flex containers prioritize flex controls, media and form fields prioritize dimensions, and styled surfaces prioritize colors. Every control remains available in its original tab.
+
+Choose a section heading to collapse or reopen it. Collapsed sections stay closed across tuner renders and LiveView patches; a suggested section reopens when you explicitly pick a new matching element.
+
 ### Similar elements
 
 When the selected element has matching siblings, **Similar** applies an edit to a frozen group of matches. The group does not change until Similar mode is restarted. A session includes at most 25 elements; the panel and copied prompt disclose when more matches exist.

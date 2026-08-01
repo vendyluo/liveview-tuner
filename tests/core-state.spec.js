@@ -14,6 +14,8 @@ async function fixture(page) {
     document.body.append(host);
     const tuner = document.querySelector("liveview-tuner");
     tuner.selectElement(host.children[0]);
+    tuner.activeTab = "layout";
+    tuner.render();
   });
 }
 
@@ -488,6 +490,142 @@ test("preserves panel scroll and control focus across a render", async ({page}) 
   expect(after.scrollTop).toBe(before.scrollTop);
   expect(after.step).toBe(before.step);
   expect(after.property).toBe(before.property);
+});
+
+test("opens and prioritizes controls for the selected element context", async ({page}) => {
+  const result = await page.evaluate(() => {
+    const host = document.createElement("section");
+    host.innerHTML = `
+      <p id="context-text">Readable copy</p>
+      <div id="context-flex" style="display: flex"><span>A</span><span>B</span></div>
+      <div id="context-grid" style="display: grid"><span>A</span><span>B</span></div>
+      <img id="context-image" alt="Preview" />
+      <input id="context-input" />
+      <div id="context-surface" style="background-color: rgb(10, 20, 30)"><span>Card</span></div>
+      <section id="context-container"><span>Content</span></section>
+    `;
+    document.body.append(host);
+    const tuner = document.querySelector("liveview-tuner");
+    const inspect = (selector) => {
+      tuner.selectElement(host.querySelector(selector));
+      const sections = [...tuner.shadowRoot.querySelectorAll("[data-section-title]")];
+      return {
+        tab: tuner.activeTab,
+        first: sections[0]?.dataset.sectionTitle,
+        suggested: tuner.shadowRoot.querySelector(".section-suggestion")?.closest("[data-section-title]")?.dataset.sectionTitle,
+        sectionCount: sections.length,
+      };
+    };
+    return {
+      text: inspect("#context-text"),
+      flex: inspect("#context-flex"),
+      grid: inspect("#context-grid"),
+      image: inspect("#context-image"),
+      input: inspect("#context-input"),
+      surface: inspect("#context-surface"),
+      container: inspect("#context-container"),
+    };
+  });
+
+  expect(result).toEqual({
+    text: {tab: "type", first: "Metrics", suggested: "Metrics", sectionCount: 3},
+    flex: {tab: "layout", first: "Flex", suggested: "Flex", sectionCount: 5},
+    grid: {tab: "layout", first: "Padding", suggested: "Padding", sectionCount: 5},
+    image: {tab: "layout", first: "Dimensions", suggested: "Dimensions", sectionCount: 5},
+    input: {tab: "layout", first: "Dimensions", suggested: "Dimensions", sectionCount: 5},
+    surface: {tab: "surface", first: "Colors", suggested: "Colors", sectionCount: 4},
+    container: {tab: "layout", first: "Padding", suggested: "Padding", sectionCount: 5},
+  });
+});
+
+test("reveals the suggested section when selecting a new element", async ({page}) => {
+  const result = await page.evaluate(async () => {
+    const host = document.createElement("section");
+    host.innerHTML = `
+      <section id="scroll-start"><span>Start</span></section>
+      <div id="scroll-flex" style="display: flex"><span>A</span><span>B</span></div>
+    `;
+    document.body.append(host);
+    const tuner = document.querySelector("liveview-tuner");
+    tuner.selectElement(host.querySelector("#scroll-start"));
+    const scroll = tuner.shadowRoot.querySelector(".panel-scroll");
+    scroll.scrollTop = scroll.scrollHeight;
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const before = scroll.scrollTop;
+
+    tuner.selectElement(host.querySelector("#scroll-flex"));
+    return {
+      before,
+      after: tuner.shadowRoot.querySelector(".panel-scroll").scrollTop,
+      first: tuner.shadowRoot.querySelector("[data-section-title]")?.dataset.sectionTitle,
+    };
+  });
+
+  expect(result.before).toBeGreaterThan(0);
+  expect(result.after).toBe(0);
+  expect(result.first).toBe("Flex");
+});
+
+test("collapses control sections across renders and reopens a new target's suggestion", async ({page}) => {
+  const result = await page.evaluate(async () => {
+    const host = document.createElement("section");
+    host.innerHTML = `
+      <div id="collapse-first"><span>First</span></div>
+      <div id="collapse-second"><span>Second</span></div>
+    `;
+    document.body.append(host);
+    const tuner = document.querySelector("liveview-tuner");
+    tuner.selectElement(host.querySelector("#collapse-first"));
+
+    const toggle = tuner.shadowRoot.querySelector('[data-section-toggle="layout:Padding"]');
+    toggle.focus();
+    toggle.click();
+    const collapsed = {
+      expanded: tuner.shadowRoot.querySelector('[data-section-toggle="layout:Padding"]').getAttribute("aria-expanded"),
+      hidden: tuner.shadowRoot.querySelector("#section-layout-padding").hidden,
+      focused: tuner.shadowRoot.activeElement?.dataset.sectionToggle,
+    };
+
+    tuner.render();
+    const afterRender = {
+      expanded: tuner.shadowRoot.querySelector('[data-section-toggle="layout:Padding"]').getAttribute("aria-expanded"),
+      hidden: tuner.shadowRoot.querySelector("#section-layout-padding").hidden,
+      focused: tuner.shadowRoot.activeElement?.dataset.sectionToggle,
+    };
+
+    const oldElement = tuner.selectedElement;
+    const replacement = oldElement.cloneNode(true);
+    oldElement.replaceWith(replacement);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const afterPatch = {
+      replacement: tuner.selectedElement === replacement,
+      expanded: tuner.shadowRoot.querySelector('[data-section-toggle="layout:Padding"]').getAttribute("aria-expanded"),
+      hidden: tuner.shadowRoot.querySelector("#section-layout-padding").hidden,
+    };
+
+    tuner.activeTab = "surface";
+    tuner.render();
+    tuner.selectElement(replacement);
+    const afterSameSelection = {
+      tab: tuner.activeTab,
+      collapsed: tuner.collapsedSections.has("layout:Padding"),
+    };
+
+    tuner.selectElement(host.querySelector("#collapse-second"));
+    const afterSelection = {
+      expanded: tuner.shadowRoot.querySelector('[data-section-toggle="layout:Padding"]').getAttribute("aria-expanded"),
+      hidden: tuner.shadowRoot.querySelector("#section-layout-padding").hidden,
+    };
+    return {collapsed, afterRender, afterPatch, afterSameSelection, afterSelection};
+  });
+
+  expect(result).toEqual({
+    collapsed: {expanded: "false", hidden: true, focused: "layout:Padding"},
+    afterRender: {expanded: "false", hidden: true, focused: "layout:Padding"},
+    afterPatch: {replacement: true, expanded: "false", hidden: true},
+    afterSameSelection: {tab: "surface", collapsed: true},
+    afterSelection: {expanded: "true", hidden: false},
+  });
 });
 
 test("moves the desktop panel and preserves its position across renders", async ({page}) => {
